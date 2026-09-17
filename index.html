@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Look to Learn - パイ投げゲーム</title>
   <!-- 視線・顔トラッキングライブラリ WebGazer.js -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
@@ -15,6 +15,7 @@
       color: #ffffff;
       font-family: sans-serif;
       touch-action: none;
+      -webkit-user-select: none;
     }
     #info-bar {
       position: absolute;
@@ -27,7 +28,7 @@
     }
     .target {
       position: absolute;
-      top: 68%; /* カメラ映像の下側に大きく配置 */
+      top: 68%;
       width: 9cm;
       height: 9cm;
       background-color: #ffffff; /* 〇の中身は白 */
@@ -47,7 +48,6 @@
     #target-left { left: 25%; transform: translate(-50%, -50%); }
     #target-right { left: 75%; transform: translate(-50%, -50%); }
 
-    /* 注視・選択中の拡大エフェクト */
     .target.gazing {
       transform: translate(-50%, -50%) scale(1.08);
     }
@@ -67,24 +67,24 @@
     }
     .gazing .progress-ring {
       opacity: 1;
-      animation: fillProgress 1.2s linear forwards; /* 1.2秒で素早く反応 */
+      animation: fillProgress 1.2s linear forwards;
     }
     @keyframes fillProgress {
       0% { clip-path: inset(100% 0 0 0); }
       100% { clip-path: inset(0 0 0 0); }
     }
 
-    /* WEBGAZER カメラ画面を画面中央上に完全強制配置＋左右反転解除 */
+    /* WEBGAZER カメラ画面を画面中央上に配置＋iOS向けplaysinline対応 */
     #webgazerVideoFeed, #webgazerVideoCanvas, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
       top: 15px !important;
       left: 50% !important;
-      transform: translateX(-50%) scaleX(-1) !important; /* scaleX(-1)で反転を直感的な鏡に補正 */
+      transform: translateX(-50%) scaleX(-1) !important;
       border: 4px solid #ff69b4 !important;
       border-radius: 16px !important;
       z-index: 90 !important;
     }
 
-    /* 視線ポインタ（赤い点）を大きく表示 */
+    /* 視線ポインタ（赤い点） */
     #webgazerGazeDot {
       width: 24px !important;
       height: 24px !important;
@@ -118,8 +118,8 @@
     }
 
     .overlay h1 {
-      font-size: 40px;
-      margin-bottom: 30px;
+      font-size: 36px;
+      margin-bottom: 20px;
       color: #ffffff;
     }
 
@@ -143,20 +143,23 @@
       transition: background-color 0.2s, transform 0.1s;
     }
 
-    .btn:hover {
+    .btn:active {
       background-color: #ff69b4;
-      color: #ffffff;
-      transform: scale(1.05);
+      transform: scale(0.98);
     }
 
-    #clear-screen h1 {
-      color: #ff69b4;
-      font-size: 48px;
-    }
-
-    #next-stage-btn {
-      margin-top: 30px;
+    #start-cam-btn {
       background-color: #ff3333;
+      font-size: 32px;
+      padding: 25px 50px;
+      margin-top: 20px;
+    }
+
+    #error-msg {
+      color: #ff3333;
+      font-size: 18px;
+      margin-top: 15px;
+      max-width: 80%;
     }
   </style>
 </head>
@@ -176,8 +179,16 @@
     <span class="icon">🍌</span>
   </div>
 
-  <!-- スタート／ステージ選択画面 -->
-  <div id="start-screen" class="overlay">
+  <!-- 1. カメラ起動許可画面 (iPad/iOSで必須のユーザー操作ステップ) -->
+  <div id="permission-screen" class="overlay">
+    <h1>カメラを使ってあそぶよ！</h1>
+    <p style="font-size: 20px; color: #ccc;">「カメラの使用許可」がでたら「許可」をおしてね</p>
+    <button id="start-cam-btn" class="btn" onclick="initCamera()">カメラを起動してはじめる</button>
+    <div id="error-msg"></div>
+  </div>
+
+  <!-- 2. スタート／ステージ選択画面 -->
+  <div id="start-screen" class="overlay hidden">
     <h1>あそぶステージをえらんでね</h1>
     <div class="category-buttons">
       <button class="btn" onclick="selectCategory('fruits')">🍎 くだもの</button>
@@ -187,7 +198,7 @@
     </div>
   </div>
 
-  <!-- クリア画面 -->
+  <!-- 3. クリア画面 -->
   <div id="clear-screen" class="overlay hidden">
     <h1>🎉 おめでとう！クリア！ 🎉</h1>
     <button id="next-stage-btn" class="btn" onclick="showCategorySelect()">つぎのステージへ</button>
@@ -200,6 +211,7 @@
     let gazeTimer = null;
     let isHit = false;
     let isGameActive = false;
+    let isCameraReady = false;
 
     let currentPosition = 'left';
 
@@ -212,10 +224,17 @@
 
     let currentCategoryList = categories.fruits;
 
-    window.onload = async () => {
-      setupMouseEvents();
+    window.onload = () => {
+      setupTouchAndMouseEvents();
+    };
+
+    // iPad / Safari 用に画面タップでカメラを起動する関数
+    async function initCamera() {
+      const errorDiv = document.getElementById('error-msg');
+      errorDiv.innerText = "カメラを準備中...";
 
       try {
+        // iPad Safariでの自動再生を許可するためのvideo要素の設定を強制
         await webgazer.setRegression('ridge')
           .setGazeListener((data, elapsedTime) => {
             if (!isGameActive || isHit || score >= maxScore) return;
@@ -223,26 +242,21 @@
             let targetX = null;
             let targetY = window.innerHeight * 0.68;
 
-            // --- 視線／顔認識の超高感度トラッキング処理 ---
+            // 顔の向き・位置判定
             if (webgazer.getTracker && webgazer.getTracker().getPositions) {
               const positions = webgazer.getTracker().getPositions();
               if (positions && positions[33]) {
                 const noseX = positions[33][0];
-                const videoWidth = 320; // 通常のWebGazerのビデオ幅
                 
-                // 顔の向き・位置から左右判定（カメラ画像内での位置）
-                // 鏡像反転を考慮して判定範囲を柔軟に設定
-                if (noseX > 170) {
-                  // 顔が左に向いている場合（左の的を指す）
-                  targetX = window.innerWidth * 0.25;
-                } else if (noseX < 150) {
-                  // 顔が右に向いている場合（右の的を指す）
-                  targetX = window.innerWidth * 0.75;
+                // iPadの解像度・向きに応じた閾値調整
+                if (noseX > 165) {
+                  targetX = window.innerWidth * 0.25; // 左
+                } else if (noseX < 145) {
+                  targetX = window.innerWidth * 0.75; // 右
                 }
               }
             }
 
-            // 顔の傾きで判定が取れない場合は、通常のWebGazer視線データ(data)を使用
             if (targetX === null && data) {
               targetX = data.x;
               targetY = data.y;
@@ -258,13 +272,31 @@
         webgazer.showVideoPreview(true)
                  .showPredictionPoints(true);
 
-        // カメラ画面の中央固定ループ処理を開始
+        // iOS用のvideo属性付与 (playsinline)
+        fixVideoForIOS();
         startCameraCenteringLoop();
 
+        isCameraReady = true;
+
+        // 許可画面を消してカテゴリ選択へ
+        document.getElementById('permission-screen').classList.add('hidden');
+        document.getElementById('start-screen').classList.remove('hidden');
+
       } catch (e) {
-        console.log("WebGazerの読み込みをスキップ、またはカメラ非対応環境です");
+        console.error("Camera Init Error:", e);
+        errorDiv.innerText = "エラー: カメラの起動に失敗しました。Safariで「カメラの利用」が許可されているか確認してください。";
       }
-    };
+    }
+
+    // iOS Safariで動画が全画面表示されたりブロックされたりするのを防ぐ設定
+    function fixVideoForIOS() {
+      const video = document.getElementById('webgazerVideoFeed');
+      if (video) {
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.play().catch(e => console.log(e));
+      }
+    }
 
     // カメラ要素を画面中央上に固定し続ける処理
     function startCameraCenteringLoop() {
@@ -302,7 +334,7 @@
       leftElem.classList.remove('hidden');
       rightElem.classList.add('hidden');
 
-      if (typeof webgazer !== 'undefined') webgazer.resume();
+      if (typeof webgazer !== 'undefined' && isCameraReady) webgazer.resume();
       isGameActive = true;
     }
 
@@ -323,19 +355,25 @@
       return icon;
     }
 
-    function setupMouseEvents() {
+    // タッチ（iPad）およびマウスイベントの両方に対応
+    function setupTouchAndMouseEvents() {
       const targets = document.querySelectorAll('.target');
       targets.forEach(target => {
-        target.addEventListener('mouseenter', () => {
+        const handleStart = (e) => {
           if (!isGameActive || isHit || score >= maxScore || target.classList.contains('hidden')) return;
           startTargetTimer(target);
-        });
+        };
 
-        target.addEventListener('mouseleave', () => {
+        const handleEnd = () => {
           if (currentActiveTarget === target) {
             resetTimer();
           }
-        });
+        };
+
+        target.addEventListener('mouseenter', handleStart);
+        target.addEventListener('mouseleave', handleEnd);
+        target.addEventListener('touchstart', handleStart, {passive: true});
+        target.addEventListener('touchend', handleEnd, {passive: true});
       });
     }
 
@@ -362,7 +400,6 @@
       currentActiveTarget = target;
       currentActiveTarget.classList.add('gazing');
       
-      // 1.2秒注視でパイ投げ発動
       gazeTimer = setTimeout(() => {
         throwPie(currentActiveTarget);
       }, 1200);
