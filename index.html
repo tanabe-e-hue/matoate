@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Look to Learn - パイ投げゲーム</title>
+  <!-- 視線・顔トラッキングライブラリ WebGazer.js -->
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000000;
+      color: #ffffff;
+      font-family: sans-serif;
+      touch-action: none;
+    }
+    #info-bar {
+      position: absolute;
+      top: 15px;
+      left: 20px;
+      font-size: 24px;
+      font-weight: bold;
+      z-index: 100;
+      color: #ffffff;
+    }
+    .target {
+      position: absolute;
+      top: 68%; /* カメラ映像の下側に大きく配置 */
+      width: 9cm;
+      height: 9cm;
+      background-color: #ffffff; /* 〇の中身は白 */
+      border: 8px solid #ffffff; 
+      border-radius: 50%; /* 枠は〇 */
+      font-size: 4.8cm;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-sizing: border-box;
+      user-select: none;
+      transition: opacity 0.3s ease, transform 0.2s ease;
+      cursor: pointer;
+      overflow: hidden;
+    }
+
+    #target-left { left: 25%; transform: translate(-50%, -50%); }
+    #target-right { left: 75%; transform: translate(-50%, -50%); }
+
+    /* 注視・選択中の拡大エフェクト */
+    .target.gazing {
+      transform: translate(-50%, -50%) scale(1.08);
+    }
+
+    /* ゲージ（タイマー）演出 */
+    .progress-ring {
+      position: absolute;
+      top: -10px;
+      left: -10px;
+      right: -10px;
+      bottom: -10px;
+      border-radius: 50%;
+      border: 12px solid #ff3333;
+      box-sizing: border-box;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .gazing .progress-ring {
+      opacity: 1;
+      animation: fillProgress 1.2s linear forwards; /* 1.2秒で素早く反応 */
+    }
+    @keyframes fillProgress {
+      0% { clip-path: inset(100% 0 0 0); }
+      100% { clip-path: inset(0 0 0 0); }
+    }
+
+    /* WEBGAZER カメラ画面を画面中央上に完全強制配置＋左右反転解除 */
+    #webgazerVideoFeed, #webgazerVideoCanvas, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
+      top: 15px !important;
+      left: 50% !important;
+      transform: translateX(-50%) scaleX(-1) !important; /* scaleX(-1)で反転を直感的な鏡に補正 */
+      border: 4px solid #ff69b4 !important;
+      border-radius: 16px !important;
+      z-index: 90 !important;
+    }
+
+    /* 視線ポインタ（赤い点）を大きく表示 */
+    #webgazerGazeDot {
+      width: 24px !important;
+      height: 24px !important;
+      background-color: #ff3333 !important;
+      z-index: 100 !important;
+      border: 2px solid #ffffff !important;
+    }
+
+    .pie {
+      position: absolute;
+      font-size: 110px;
+      z-index: 150;
+      transition: all 0.4s ease-in-out;
+      pointer-events: none;
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+
+    .overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.95);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+
+    .overlay h1 {
+      font-size: 40px;
+      margin-bottom: 30px;
+      color: #ffffff;
+    }
+
+    .category-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      width: 80%;
+      max-width: 600px;
+    }
+
+    .btn {
+      background-color: #000000;
+      color: #ffffff;
+      border: 3px solid #ffffff;
+      border-radius: 15px;
+      padding: 20px;
+      font-size: 28px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background-color 0.2s, transform 0.1s;
+    }
+
+    .btn:hover {
+      background-color: #ff69b4;
+      color: #ffffff;
+      transform: scale(1.05);
+    }
+
+    #clear-screen h1 {
+      color: #ff69b4;
+      font-size: 48px;
+    }
+
+    #next-stage-btn {
+      margin-top: 30px;
+      background-color: #ff3333;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="info-bar">成功: <span id="score">0</span> / 5</div>
+  
+  <!-- 左の的 -->
+  <div id="target-left" class="target hidden">
+    <div class="progress-ring"></div>
+    <span class="icon">🍎</span>
+  </div>
+  
+  <!-- 右の的 -->
+  <div id="target-right" class="target hidden">
+    <div class="progress-ring"></div>
+    <span class="icon">🍌</span>
+  </div>
+
+  <!-- スタート／ステージ選択画面 -->
+  <div id="start-screen" class="overlay">
+    <h1>あそぶステージをえらんでね</h1>
+    <div class="category-buttons">
+      <button class="btn" onclick="selectCategory('fruits')">🍎 くだもの</button>
+      <button class="btn" onclick="selectCategory('animals')">🐶 どうぶつ</button>
+      <button class="btn" onclick="selectCategory('vegetables')">🥦 やさい</button>
+      <button class="btn" onclick="selectCategory('vehicles')">🚗 のりもの</button>
+    </div>
+  </div>
+
+  <!-- クリア画面 -->
+  <div id="clear-screen" class="overlay hidden">
+    <h1>🎉 おめでとう！クリア！ 🎉</h1>
+    <button id="next-stage-btn" class="btn" onclick="showCategorySelect()">つぎのステージへ</button>
+  </div>
+
+  <script>
+    let score = 0;
+    const maxScore = 5;
+    let currentActiveTarget = null;
+    let gazeTimer = null;
+    let isHit = false;
+    let isGameActive = false;
+
+    let currentPosition = 'left';
+
+    const categories = {
+      fruits: ['🍎', '🍌', '🍊', '🍇', '🍓', '🍑', '🍍', '🍈'],
+      animals: ['🐶', '🐱', '🐰', '🦊', '🐻', '🐼', '🦁', '🐯'],
+      vegetables: ['🥦', '🥕', '🌽', '🍅', '🍆', '🥬', '🍠', '🫑'],
+      vehicles: ['🚗', '🚃', '✈️', '🚀', '🚢', '🚁', '🚲', '🚑']
+    };
+
+    let currentCategoryList = categories.fruits;
+
+    window.onload = async () => {
+      setupMouseEvents();
+
+      try {
+        await webgazer.setRegression('ridge')
+          .setGazeListener((data, elapsedTime) => {
+            if (!isGameActive || isHit || score >= maxScore) return;
+
+            let targetX = null;
+            let targetY = window.innerHeight * 0.68;
+
+            // --- 視線／顔認識の超高感度トラッキング処理 ---
+            if (webgazer.getTracker && webgazer.getTracker().getPositions) {
+              const positions = webgazer.getTracker().getPositions();
+              if (positions && positions[33]) {
+                const noseX = positions[33][0];
+                const videoWidth = 320; // 通常のWebGazerのビデオ幅
+                
+                // 顔の向き・位置から左右判定（カメラ画像内での位置）
+                // 鏡像反転を考慮して判定範囲を柔軟に設定
+                if (noseX > 170) {
+                  // 顔が左に向いている場合（左の的を指す）
+                  targetX = window.innerWidth * 0.25;
+                } else if (noseX < 150) {
+                  // 顔が右に向いている場合（右の的を指す）
+                  targetX = window.innerWidth * 0.75;
+                }
+              }
+            }
+
+            // 顔の傾きで判定が取れない場合は、通常のWebGazer視線データ(data)を使用
+            if (targetX === null && data) {
+              targetX = data.x;
+              targetY = data.y;
+            }
+
+            if (targetX !== null) {
+              checkGaze(targetX, targetY);
+            }
+          })
+          .saveDataAcrossSessions(true)
+          .begin();
+
+        webgazer.showVideoPreview(true)
+                 .showPredictionPoints(true);
+
+        // カメラ画面の中央固定ループ処理を開始
+        startCameraCenteringLoop();
+
+      } catch (e) {
+        console.log("WebGazerの読み込みをスキップ、またはカメラ非対応環境です");
+      }
+    };
+
+    // カメラ要素を画面中央上に固定し続ける処理
+    function startCameraCenteringLoop() {
+      const ids = ['webgazerVideoFeed', 'webgazerVideoCanvas', 'webgazerFaceOverlay', 'webgazerFaceFeedbackBox'];
+      
+      setInterval(() => {
+        ids.forEach(id => {
+          const elem = document.getElementById(id);
+          if (elem) {
+            elem.style.setProperty('position', 'fixed', 'important');
+            elem.style.setProperty('top', '15px', 'important');
+            elem.style.setProperty('left', '50%', 'important');
+            elem.style.setProperty('transform', 'translateX(-50%) scaleX(-1)', 'important');
+            elem.style.setProperty('margin', '0', 'important');
+          }
+        });
+      }, 100);
+    }
+
+    function selectCategory(categoryKey) {
+      currentCategoryList = categories[categoryKey];
+      
+      score = 0;
+      document.getElementById('score').innerText = score;
+      isHit = false;
+
+      document.getElementById('start-screen').classList.add('hidden');
+      document.getElementById('clear-screen').classList.add('hidden');
+
+      currentPosition = 'left';
+      const leftElem = document.getElementById('target-left');
+      const rightElem = document.getElementById('target-right');
+      
+      leftElem.querySelector('.icon').innerText = getRandomIcon();
+      leftElem.classList.remove('hidden');
+      rightElem.classList.add('hidden');
+
+      if (typeof webgazer !== 'undefined') webgazer.resume();
+      isGameActive = true;
+    }
+
+    function showCategorySelect() {
+      isGameActive = false;
+      resetTimer();
+      document.getElementById('target-left').classList.add('hidden');
+      document.getElementById('target-right').classList.add('hidden');
+      document.getElementById('clear-screen').classList.add('hidden');
+      document.getElementById('start-screen').classList.remove('hidden');
+    }
+
+    function getRandomIcon(excludeIcon = '') {
+      let icon;
+      do {
+        icon = currentCategoryList[Math.floor(Math.random() * currentCategoryList.length)];
+      } while (icon === excludeIcon && currentCategoryList.length > 1);
+      return icon;
+    }
+
+    function setupMouseEvents() {
+      const targets = document.querySelectorAll('.target');
+      targets.forEach(target => {
+        target.addEventListener('mouseenter', () => {
+          if (!isGameActive || isHit || score >= maxScore || target.classList.contains('hidden')) return;
+          startTargetTimer(target);
+        });
+
+        target.addEventListener('mouseleave', () => {
+          if (currentActiveTarget === target) {
+            resetTimer();
+          }
+        });
+      });
+    }
+
+    function checkGaze(x, y) {
+      const activeElem = currentPosition === 'left' 
+        ? document.getElementById('target-left') 
+        : document.getElementById('target-right');
+
+      if (!activeElem || activeElem.classList.contains('hidden')) return;
+
+      const rect = activeElem.getBoundingClientRect();
+
+      if (isInside(x, y, rect)) {
+        if (currentActiveTarget !== activeElem) {
+          startTargetTimer(activeElem);
+        }
+      } else if (currentActiveTarget && !isMouseOver(currentActiveTarget)) {
+        resetTimer();
+      }
+    }
+
+    function startTargetTimer(target) {
+      resetTimer();
+      currentActiveTarget = target;
+      currentActiveTarget.classList.add('gazing');
+      
+      // 1.2秒注視でパイ投げ発動
+      gazeTimer = setTimeout(() => {
+        throwPie(currentActiveTarget);
+      }, 1200);
+    }
+
+    function isInside(x, y, rect) {
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }
+
+    function isMouseOver(element) {
+      return element.matches(':hover');
+    }
+
+    function resetTimer() {
+      if (gazeTimer) {
+        clearTimeout(gazeTimer);
+        gazeTimer = null;
+      }
+      if (currentActiveTarget) {
+        currentActiveTarget.classList.remove('gazing');
+        currentActiveTarget = null;
+      }
+    }
+
+    function throwPie(targetElem) {
+      isHit = true;
+      resetTimer();
+
+      const rect = targetElem.getBoundingClientRect();
+      const pie = document.createElement('div');
+      pie.className = 'pie';
+      pie.innerHTML = '🥧';
+      
+      pie.style.left = '50%';
+      pie.style.top = '100%';
+      document.body.appendChild(pie);
+
+      setTimeout(() => {
+        pie.style.left = `${rect.left + rect.width / 2 - 55}px`;
+        pie.style.top = `${rect.top + rect.height / 2 - 55}px`;
+      }, 50);
+
+      setTimeout(() => {
+        pie.innerHTML = '💥';
+        
+        targetElem.classList.add('hidden');
+
+        score++;
+        document.getElementById('score').innerText = score;
+
+        setTimeout(() => {
+          pie.remove();
+
+          if (score >= maxScore) {
+            isGameActive = false;
+            document.getElementById('clear-screen').classList.remove('hidden');
+            if (typeof webgazer !== 'undefined') webgazer.pause();
+          } else {
+            switchToNextTarget();
+            isHit = false;
+          }
+        }, 600);
+      }, 450);
+    }
+
+    function switchToNextTarget() {
+      currentPosition = (currentPosition === 'left') ? 'right' : 'left';
+      
+      const nextElem = currentPosition === 'left' 
+        ? document.getElementById('target-left') 
+        : document.getElementById('target-right');
+
+      const iconSpan = nextElem.querySelector('.icon');
+      
+      const currentIcon = document.querySelector('.target:not(.hidden) .icon')?.innerText;
+      iconSpan.innerText = getRandomIcon(currentIcon);
+      
+      nextElem.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
